@@ -1,0 +1,26 @@
+[project]
+name = "storage"
+version = "0.1.0"
+description = "FastAPI static image storage with WEBP conversion"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.116.0,<1.0.0",
+    "uvicorn[standard]>=0.35.0,<1.0.0",
+    "python-multipart>=0.0.20,<1.0.0",
+    "pillow>=11.3.0,<12.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.4.0,<9.0.0",
+    "httpx>=0.28.0,<1.0.0",
+]
+
+[build-system]
+requires = ["setuptools>=80.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
