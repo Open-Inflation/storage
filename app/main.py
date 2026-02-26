@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-from io import BytesIO
+import asyncio
 from pathlib import Path
+from typing import BinaryIO
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile, status
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, UnidentifiedImageError
+from starlette.concurrency import run_in_threadpool
 
 from app.config import Settings, load_settings
 
@@ -29,9 +31,25 @@ def _validate_image_name(image_name: str) -> str:
     return image_name
 
 
+def _save_webp(
+    source_stream: BinaryIO,
+    destination: Path,
+    *,
+    quality: int,
+    method: int,
+    max_image_side: int,
+) -> None:
+    source_stream.seek(0)
+    with Image.open(source_stream) as image:
+        if max_image_side > 0:
+            image.thumbnail((max_image_side, max_image_side), Image.Resampling.LANCZOS)
+        image.convert("RGB").save(destination, format="WEBP", quality=quality, method=method)
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     app_settings = settings or load_settings()
     app_settings.storage_dir.mkdir(parents=True, exist_ok=True)
+    conversion_slots = asyncio.Semaphore(app_settings.max_convert_concurrency)
 
     app = FastAPI(
         title="Image Storage",
@@ -60,20 +78,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         file: UploadFile = File(...),
         _: None = Depends(require_token),
     ) -> Response:
-        raw_image = await file.read()
-        await file.close()
-
         image_name = f"{uuid4().hex}.webp"
         image_path = app_settings.storage_dir / image_name
 
         try:
-            with Image.open(BytesIO(raw_image)) as image:
-                image.convert("RGB").save(image_path, format="WEBP")
-        except UnidentifiedImageError as exc:
+            async with conversion_slots:
+                await run_in_threadpool(
+                    _save_webp,
+                    file.file,
+                    image_path,
+                    quality=app_settings.webp_quality,
+                    method=app_settings.webp_method,
+                    max_image_side=app_settings.max_image_side,
+                )
+        except (UnidentifiedImageError, OSError) as exc:
+            image_path.unlink(missing_ok=True)
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Uploaded file is not a valid image",
             ) from exc
+        finally:
+            await file.close()
 
         image_url = request.url_for("images", path=image_name)
         return RedirectResponse(url=str(image_url), status_code=status.HTTP_303_SEE_OTHER)

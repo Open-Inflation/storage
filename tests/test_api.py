@@ -11,14 +11,14 @@ from app.config import Settings
 from app.main import create_app
 
 
-def _png_bytes() -> bytes:
+def _png_bytes(width: int = 40, height: int = 40) -> bytes:
     stream = BytesIO()
-    Image.new("RGB", (40, 40), color=(12, 200, 50)).save(stream, format="PNG")
+    Image.new("RGB", (width, height), color=(12, 200, 50)).save(stream, format="PNG")
     return stream.getvalue()
 
 
-def _create_client(storage_dir: Path, token: str = "test-token") -> TestClient:
-    settings = Settings(api_token=token, storage_dir=storage_dir)
+def _create_client(storage_dir: Path, token: str = "test-token", **settings_overrides: int) -> TestClient:
+    settings = Settings(api_token=token, storage_dir=storage_dir, **settings_overrides)
     return TestClient(create_app(settings=settings))
 
 
@@ -64,6 +64,24 @@ def test_upload_rejects_invalid_image(tmp_path: Path) -> None:
     )
     assert response.status_code == 400
     assert "valid image" in response.json()["detail"]
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_upload_resizes_to_max_side_when_configured(tmp_path: Path) -> None:
+    client = _create_client(tmp_path, max_image_side=20)
+    response = client.post(
+        "/api/images",
+        headers={"Authorization": "Bearer test-token"},
+        files={"file": ("image.png", _png_bytes(width=120, height=60), "image/png")},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+    image_path = urlparse(response.headers["location"]).path
+    image_name = image_path.rsplit("/", 1)[1]
+    stored_file = tmp_path / image_name
+    with Image.open(stored_file) as converted:
+        assert max(converted.size) <= 20
 
 
 def test_delete_requires_authorization(tmp_path: Path) -> None:
