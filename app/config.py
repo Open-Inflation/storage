@@ -36,6 +36,7 @@ def _load_int_setting(
 class Settings:
     api_token: str
     storage_dir: Path
+    permanent_storage_dir: Path
     webp_quality: int = 80
     webp_method: int = 2
     max_image_side: int = 0
@@ -45,6 +46,7 @@ class Settings:
 def load_settings() -> Settings:
     api_token = os.getenv("STORAGE_API_TOKEN", "change-me-token")
     storage_dir = Path(os.getenv("STORAGE_DIR", "data/images")).expanduser().resolve()
+    permanent_storage_dir = Path(os.getenv("PERMANENT_DIR", "data/images_permanent")).expanduser().resolve()
     webp_quality = _load_int_setting("STORAGE_WEBP_QUALITY", 80, minimum=0, maximum=100)
     webp_method = _load_int_setting("STORAGE_WEBP_METHOD", 2, minimum=0, maximum=6)
     max_image_side = _load_int_setting("STORAGE_MAX_IMAGE_SIDE", 0, minimum=0)
@@ -56,6 +58,7 @@ def load_settings() -> Settings:
     return Settings(
         api_token=api_token,
         storage_dir=storage_dir,
+        permanent_storage_dir=permanent_storage_dir,
         webp_quality=webp_quality,
         webp_method=webp_method,
         max_image_side=max_image_side,
