@@ -1,14 +1,13 @@
 from __future__ import annotations
 
+import importlib
 from io import BytesIO
 from pathlib import Path
 from urllib.parse import urlparse
 
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from PIL import Image
-
-from app.config import Settings
-from app.main import create_app
 
 
 def _png_bytes(width: int = 40, height: int = 40) -> bytes:
@@ -17,102 +16,165 @@ def _png_bytes(width: int = 40, height: int = 40) -> bytes:
     return stream.getvalue()
 
 
-def _create_client(storage_dir: Path, token: str = "test-token", **settings_overrides: int) -> TestClient:
-    settings = Settings(api_token=token, storage_dir=storage_dir, **settings_overrides)
-    return TestClient(create_app(settings=settings))
+def _create_app(
+    monkeypatch,
+    storage_dir: Path,
+    *,
+    token: str = "test-token",
+    max_image_side: int = 0,
+) -> FastAPI:
+    permanent_dir = storage_dir.parent / f"{storage_dir.name}_permanent"
+
+    monkeypatch.setenv("STORAGE_API_TOKEN", token)
+    monkeypatch.setenv("STORAGE_DIR", str(storage_dir))
+    monkeypatch.setenv("PERMANENT_DIR", str(permanent_dir))
+    monkeypatch.setenv("STORAGE_MAX_IMAGE_SIDE", str(max_image_side))
+    monkeypatch.setenv("STORAGE_WEBP_QUALITY", "80")
+    monkeypatch.setenv("STORAGE_WEBP_METHOD", "2")
+    monkeypatch.setenv("STORAGE_MAX_CONVERT_CONCURRENCY", "1")
+
+    import app.main as app_main
+
+    return importlib.reload(app_main).app
 
 
-def test_upload_requires_authorization(tmp_path: Path) -> None:
-    client = _create_client(tmp_path)
-    response = client.post("/api/images", files={"file": ("image.png", _png_bytes(), "image/png")})
+def test_upload_requires_authorization(tmp_path: Path, monkeypatch) -> None:
+    app = _create_app(monkeypatch, tmp_path / "temp")
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/images/unauthorized.webp",
+            files={"file": ("image.png", _png_bytes(), "image/png")},
+        )
     assert response.status_code == 401
 
 
-def test_upload_converts_to_webp_and_redirects(tmp_path: Path) -> None:
-    client = _create_client(tmp_path)
-    response = client.post(
-        "/api/images",
-        headers={"Authorization": "Bearer test-token"},
-        files={"file": ("image.png", _png_bytes(), "image/png")},
-        follow_redirects=False,
-    )
+def test_upload_converts_to_webp_and_serves_public_url(tmp_path: Path, monkeypatch) -> None:
+    storage_dir = tmp_path / "temp"
+    app = _create_app(monkeypatch, storage_dir)
 
-    assert response.status_code == 303
-    location = response.headers["location"]
-    parsed = urlparse(location)
-    assert parsed.path.startswith("/images/")
-    assert parsed.path.endswith(".webp")
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/images/sample.webp",
+            headers={"Authorization": "Bearer test-token"},
+            files={"file": ("image.png", _png_bytes(), "image/png")},
+        )
 
-    stored_name = parsed.path.rsplit("/", 1)[1]
-    stored_file = tmp_path / stored_name
-    assert stored_file.exists()
+        assert response.status_code == 201
+        location = response.headers["location"]
+        parsed = urlparse(location)
+        assert parsed.path == "/images/sample.webp"
 
-    with Image.open(stored_file) as converted:
-        assert converted.format == "WEBP"
+        stored_file = storage_dir / "sample.webp"
+        assert stored_file.exists()
 
-    public_response = client.get(parsed.path)
-    assert public_response.status_code == 200
-    assert public_response.headers["content-type"].startswith("image/webp")
+        with Image.open(stored_file) as converted:
+            assert converted.format == "WEBP"
+
+        public_response = client.get(parsed.path)
+        assert public_response.status_code == 200
+        assert public_response.headers["content-type"].startswith("image/webp")
 
 
-def test_upload_rejects_invalid_image(tmp_path: Path) -> None:
-    client = _create_client(tmp_path)
-    response = client.post(
-        "/api/images",
-        headers={"Authorization": "Bearer test-token"},
-        files={"file": ("bad.bin", b"not an image", "application/octet-stream")},
-    )
+def test_upload_rejects_invalid_image(tmp_path: Path, monkeypatch) -> None:
+    storage_dir = tmp_path / "temp"
+    app = _create_app(monkeypatch, storage_dir)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/images/bad.webp",
+            headers={"Authorization": "Bearer test-token"},
+            files={"file": ("bad.bin", b"not an image", "application/octet-stream")},
+        )
+
     assert response.status_code == 400
-    assert "valid image" in response.json()["detail"]
-    assert list(tmp_path.iterdir()) == []
+    assert "invalid" in response.json()["detail"].lower()
+    assert not list(storage_dir.glob("*.webp"))
 
 
-def test_upload_resizes_to_max_side_when_configured(tmp_path: Path) -> None:
-    client = _create_client(tmp_path, max_image_side=20)
-    response = client.post(
-        "/api/images",
-        headers={"Authorization": "Bearer test-token"},
-        files={"file": ("image.png", _png_bytes(width=120, height=60), "image/png")},
-        follow_redirects=False,
-    )
-    assert response.status_code == 303
+def test_upload_resizes_to_max_side_when_configured(tmp_path: Path, monkeypatch) -> None:
+    storage_dir = tmp_path / "temp"
+    app = _create_app(monkeypatch, storage_dir)
 
-    image_path = urlparse(response.headers["location"]).path
-    image_name = image_path.rsplit("/", 1)[1]
-    stored_file = tmp_path / image_name
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/images/resized.webp?max_image_side=20",
+            headers={"Authorization": "Bearer test-token"},
+            files={"file": ("image.png", _png_bytes(width=120, height=60), "image/png")},
+        )
+
+    assert response.status_code == 201
+
+    stored_file = storage_dir / "resized.webp"
     with Image.open(stored_file) as converted:
         assert max(converted.size) <= 20
 
 
-def test_delete_requires_authorization(tmp_path: Path) -> None:
-    client = _create_client(tmp_path)
-    file_path = tmp_path / "sample.webp"
+def test_delete_requires_authorization(tmp_path: Path, monkeypatch) -> None:
+    storage_dir = tmp_path / "temp"
+    storage_dir.mkdir(parents=True, exist_ok=True)
+    file_path = storage_dir / "sample.webp"
     file_path.write_bytes(b"test")
 
-    response = client.delete("/api/images/sample.webp")
+    app = _create_app(monkeypatch, storage_dir)
+    with TestClient(app) as client:
+        response = client.delete("/api/images/sample.webp")
+
     assert response.status_code == 401
     assert file_path.exists()
 
 
-def test_delete_removes_image(tmp_path: Path) -> None:
-    client = _create_client(tmp_path)
-    create_response = client.post(
-        "/api/images",
-        headers={"Authorization": "Bearer test-token"},
-        files={"file": ("image.png", _png_bytes(), "image/png")},
-        follow_redirects=False,
-    )
-    image_path = urlparse(create_response.headers["location"]).path
-    image_name = image_path.rsplit("/", 1)[1]
-    stored_file = tmp_path / image_name
-    assert stored_file.exists()
+def test_delete_removes_image(tmp_path: Path, monkeypatch) -> None:
+    storage_dir = tmp_path / "temp"
+    app = _create_app(monkeypatch, storage_dir)
 
-    delete_response = client.delete(
-        f"/api/images/{image_name}",
-        headers={"Authorization": "Bearer test-token"},
-    )
-    assert delete_response.status_code == 204
-    assert not stored_file.exists()
+    with TestClient(app) as client:
+        create_response = client.post(
+            "/api/images/delete-me.webp",
+            headers={"Authorization": "Bearer test-token"},
+            files={"file": ("image.png", _png_bytes(), "image/png")},
+        )
+        assert create_response.status_code == 201
 
-    public_response = client.get(image_path)
-    assert public_response.status_code == 404
+        delete_response = client.delete(
+            "/api/images/delete-me.webp",
+            headers={"Authorization": "Bearer test-token"},
+        )
+        assert delete_response.status_code == 204
+
+        stored_file = storage_dir / "delete-me.webp"
+        assert not stored_file.exists()
+
+        public_response = client.get("/images/delete-me.webp")
+        assert public_response.status_code == 404
+
+
+def test_persist_moves_image_to_permanent_storage_and_redirects(tmp_path: Path, monkeypatch) -> None:
+    storage_dir = tmp_path / "temp"
+    permanent_dir = tmp_path / "temp_permanent"
+    app = _create_app(monkeypatch, storage_dir)
+
+    with TestClient(app) as client:
+        create_response = client.post(
+            "/api/images/keep.webp",
+            headers={"Authorization": "Bearer test-token"},
+            files={"file": ("image.png", _png_bytes(), "image/png")},
+        )
+        assert create_response.status_code == 201
+
+        persist_response = client.post(
+            "/api/images/keep.webp/persist",
+            headers={"Authorization": "Bearer test-token"},
+            follow_redirects=False,
+        )
+
+        assert persist_response.status_code == 303
+        location = persist_response.headers["location"]
+        parsed = urlparse(location)
+        assert parsed.path == "/images-permanent/keep.webp"
+
+        assert not (storage_dir / "keep.webp").exists()
+        assert (permanent_dir / "keep.webp").exists()
+
+        public_response = client.get(parsed.path)
+        assert public_response.status_code == 200
+        assert public_response.headers["content-type"].startswith("image/webp")
