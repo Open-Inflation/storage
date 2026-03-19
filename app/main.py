@@ -9,6 +9,7 @@ from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, Up
 from fastapi.responses import RedirectResponse
 from PIL import Image, ImageFile
 from starlette.concurrency import run_in_threadpool
+from starlette.staticfiles import StaticFiles
 from app.tools import (
     require_token,
     get_conversion_slots,
@@ -61,6 +62,18 @@ app = FastAPI(
     version="1.1.0",
     lifespan=lifespan,
     docs_url="/",
+)
+
+_mounted_settings = load_settings()
+app.mount(
+    "/images",
+    StaticFiles(directory=str(_mounted_settings.storage_dir), check_dir=False),
+    name="images",
+)
+app.mount(
+    "/images-permanent",
+    StaticFiles(directory=str(_mounted_settings.permanent_storage_dir), check_dir=False),
+    name="images_permanent",
 )
 
 # --- Health check endpoint ---
