@@ -186,3 +186,44 @@ def test_persist_moves_image_to_permanent_storage_and_redirects(tmp_path: Path, 
         head_response = client.head(parsed.path)
         assert head_response.status_code == 200
         assert int(head_response.headers["content-length"]) == (permanent_dir / "keep.webp").stat().st_size
+
+
+def test_persist_overwrite_replaces_existing_permanent_file(tmp_path: Path, monkeypatch) -> None:
+    storage_dir = tmp_path / "temp"
+    permanent_dir = tmp_path / "temp_permanent"
+    app = _create_app(monkeypatch, storage_dir)
+
+    with TestClient(app) as client:
+        first_upload = client.post(
+            "/api/images/keep.webp",
+            headers={"Authorization": "Bearer test-token"},
+            files={"file": ("first.png", _png_bytes(width=40, height=40), "image/png")},
+        )
+        assert first_upload.status_code == 201
+
+        first_persist = client.post(
+            "/api/images/keep.webp/persist",
+            headers={"Authorization": "Bearer test-token"},
+            follow_redirects=False,
+        )
+        assert first_persist.status_code == 303
+
+        initial_bytes = (permanent_dir / "keep.webp").read_bytes()
+
+        second_upload = client.post(
+            "/api/images/keep.webp",
+            headers={"Authorization": "Bearer test-token"},
+            files={"file": ("second.png", _png_bytes(width=80, height=40), "image/png")},
+        )
+        assert second_upload.status_code == 201
+
+        overwrite_persist = client.post(
+            "/api/images/keep.webp/persist?overwrite=true",
+            headers={"Authorization": "Bearer test-token"},
+            follow_redirects=False,
+        )
+        assert overwrite_persist.status_code == 303
+
+        replaced_bytes = (permanent_dir / "keep.webp").read_bytes()
+        assert replaced_bytes != initial_bytes
+        assert not (storage_dir / "keep.webp").exists()

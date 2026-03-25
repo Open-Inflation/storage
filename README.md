@@ -85,6 +85,16 @@ curl -I "http://localhost:8000/images/<uuid>.webp"
 curl -I "http://localhost:8000/images-permanent/<uuid>.webp"
 ```
 
+### Перенос во permanent (с авторизацией)
+
+```bash
+curl -i -X POST "http://localhost:8000/api/images/<uuid>.webp/persist?overwrite=true" \
+  -H "Authorization: Bearer super-secret-token"
+```
+
+Ожидаемый ответ: `303 See Other` и заголовок `Location: /images-permanent/<uuid>.webp`.
+Если `overwrite=true`, существующий permanent-файл будет заменён новым temp-файлом с тем же именем.
+
 ## Тесты
 
 ```bash
