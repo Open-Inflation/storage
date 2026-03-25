@@ -30,6 +30,13 @@ logging.basicConfig(level=logging.INFO)
 LOGGER = logging.getLogger("image_storage")
 
 
+class _SizedStaticFiles(StaticFiles):
+    def file_response(self, full_path, stat_result, scope, status_code=200):  # type: ignore[override]
+        response = super().file_response(full_path, stat_result, scope, status_code)
+        response.headers["Content-Length"] = str(stat_result.st_size)
+        return response
+
+
 # --- Lifespan management ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -67,12 +74,12 @@ app = FastAPI(
 _mounted_settings = load_settings()
 app.mount(
     "/images",
-    StaticFiles(directory=str(_mounted_settings.storage_dir), check_dir=False),
+    _SizedStaticFiles(directory=str(_mounted_settings.storage_dir), check_dir=False),
     name="images",
 )
 app.mount(
     "/images-permanent",
-    StaticFiles(directory=str(_mounted_settings.permanent_storage_dir), check_dir=False),
+    _SizedStaticFiles(directory=str(_mounted_settings.permanent_storage_dir), check_dir=False),
     name="images_permanent",
 )
 

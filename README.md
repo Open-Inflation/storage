@@ -77,7 +77,13 @@ curl -i -X DELETE "http://localhost:8000/api/images/<uuid>.webp" \
 curl -I "http://localhost:8000/images/<uuid>.webp"
 ```
 
-Ожидаемый ответ: `200 OK` (если файл существует)
+Ожидаемый ответ: `200 OK` (если файл существует), с `Content-Length`, который можно использовать как размер файла в байтах.
+
+То же поведение доступно и для постоянного URL:
+
+```bash
+curl -I "http://localhost:8000/images-permanent/<uuid>.webp"
+```
 
 ## Тесты
 

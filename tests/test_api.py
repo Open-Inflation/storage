@@ -74,6 +74,10 @@ def test_upload_converts_to_webp_and_serves_public_url(tmp_path: Path, monkeypat
         assert public_response.status_code == 200
         assert public_response.headers["content-type"].startswith("image/webp")
 
+        head_response = client.head(parsed.path)
+        assert head_response.status_code == 200
+        assert int(head_response.headers["content-length"]) == stored_file.stat().st_size
+
 
 def test_upload_rejects_invalid_image(tmp_path: Path, monkeypatch) -> None:
     storage_dir = tmp_path / "temp"
@@ -178,3 +182,7 @@ def test_persist_moves_image_to_permanent_storage_and_redirects(tmp_path: Path, 
         public_response = client.get(parsed.path)
         assert public_response.status_code == 200
         assert public_response.headers["content-type"].startswith("image/webp")
+
+        head_response = client.head(parsed.path)
+        assert head_response.status_code == 200
+        assert int(head_response.headers["content-length"]) == (permanent_dir / "keep.webp").stat().st_size
